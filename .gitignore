@@ -1,0 +1,7 @@
+# editor detritus
+*~
+*.swp
+
+# the legit configs
+praw.ini
+AutoMod/*.yaml
