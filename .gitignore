@@ -4,4 +4,4 @@
 
 # the legit configs
 praw.ini
-AutoMod/*.yaml
+rules.yaml

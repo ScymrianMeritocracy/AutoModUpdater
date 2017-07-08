@@ -1,32 +1,62 @@
 #!/usr/bin/python3
 
 import argparse
+import bisect
 import collections
 import difflib
-import errno
-import glob
 import os
 import praw
 import pydoc
 import readline
+import ruamel.yaml
 import sys
 
-def concatconf(sub, myconf):
-    """Combine shared and sub-specific local conf."""
-    if not myconf[sub]:
-        concat = myconf["all"]
-    else:
-        concat = "{}---\n{}".format(myconf["all"], myconf[sub])
-    return concat
+def concatconf(sub, conf):
+    """Return concatented rule list from loaded configs."""
+    list = ""
+    first = True
+    for rule in conf:
+        if sub in conf[rule] or sub == "all":
+            if first:
+                first = False
+            else:
+                list += "---\n"
+            list += "{}\n".format(rule)
+            if sub == "all":
+                list += "subreddits: ["
+                list += ", ".join(conf[rule])
+                list += "]\n"
+    return list.rstrip()
+
+def dumprules(r, subs):
+    """Return mapping of rules to subreddits from sub configs."""
+    live = collections.OrderedDict()
+    for sub in subs:
+        page = r.subreddit(sub).wiki["config/automoderator"]
+        try:
+            rules = page.content_md.replace("\r\n", "\n").split("\n---\n")
+        except:
+            print("{}: trouble reading wiki page".format(sub))
+            continue
+        if "" in rules:
+            rules.remove("")
+        for rule in rules:
+            chomped = rule.rstrip()
+            if chomped in live:
+                if sub not in live[chomped]:
+                    bisect.insort_left(live[chomped], sub)
+            else:
+                live[chomped] = [sub]
+    return live
 
 def gendiff(sub, myfrom, myto, myfromfile, mytofile):
     """Generate and page a diff for the given YAML."""
     diff = difflib.unified_diff(
             myfrom.splitlines(),
             myto.splitlines(),
-            fromfile = myfromfile,
-            tofile = mytofile,
-            lineterm = "")
+            fromfile=myfromfile,
+            tofile=mytofile,
+            lineterm="")
     try:
         first = next(diff)
     except:
@@ -36,122 +66,85 @@ def gendiff(sub, myfrom, myto, myfromfile, mytofile):
     return True
 
 def init(r, mypath, mycmd):
-    """Create new local copy of configs."""
-    os.makedirs("{}/AutoMod".format(mypath), exist_ok=True)
-    liveconf = remoteconf(r, mycmd.subreddit)
-    rules = sharedconf(mycmd.subreddit, liveconf)
-    myconf = {}
-    if ["all"] in rules.values():
-        myconf["all"] = ""
-    for sub in mycmd.subreddit:
-        myconf[sub] = ""
-    for rule in rules:
-        for sub in rules[rule]:
-            myconf[sub] += "---\n"
-            myconf[sub] += rule
-    for sub in myconf:
-        path = "{}/AutoMod/{}.yaml".format(mypath, sub)
-        writeyaml(path, myconf[sub][4:])
+    """Create new local config from rule mapping."""
+    mycmd.subreddit.sort()
+    live = dumprules(r, mycmd.subreddit)
+    writeyaml(mypath, live)
 
-def localconf(mypath):
-    """Return YAML from config directory beside ourself"""
-    myyaml = glob.glob("{}/AutoMod/*.yaml".format(mypath))
-    myconf = {}
-    for rules in myyaml:
-        sub = os.path.splitext(os.path.basename(rules))[0]
-        conf = open(rules, "r")
-        myconf[sub] = conf.read()
-        conf.close()
-    if myconf:
-        return myconf
-    else:
-        print("No local rules")
-        sys.exit(os.EX_NOINPUT)
+def loadrules(mypath):
+    """Return mapping of rules from config file beside ourself."""
+    local = collections.OrderedDict()
+    path = "{}/rules.yaml".format(mypath)
+    try:
+        with open(path, "r") as conf:
+            key, value = "", []
+            for line in conf:
+                if line.startswith("subreddits"):
+                    value = ruamel.yaml.safe_load(line)["subreddits"]
+                    value.sort()
+                elif line.startswith("---"):
+                    local[key.rstrip()] = value
+                    key = ""
+                else:
+                    key += line
+            local[key.rstrip()] = value
+        return local
+    except:
+        print("Trouble reading local rules")
+        sys.exit(os.EX_IOERR)
+
+def modinit(r, mypath, mycmd):
+    """Init with all subreddits moderated."""
+    subs = []
+    mod = r.user.moderator_subreddits()
+    for sub in mod:
+        subs.append(sub.display_name)
+    subs.sort()
+    live = dumprules(r, subs)
+    writeyaml(mypath, live)
 
 def pull(r, mypath, mycmd):
     """Update local copy of configs."""
-    oldconf = localconf(mypath)
-    liveconf = remoteconf(r, list(oldconf))
-    rules = sharedconf(list(liveconf), liveconf)
-    myconf = {}
-    if ["all"] in rules.values():
-        myconf["all"] = ""
-    for sub in list(liveconf):
-        myconf[sub] = ""
-    for rule in rules:
-        for sub in rules[rule]:
-            myconf[sub] += "---\n"
-            myconf[sub] += rule
-    for sub in list(myconf):
-        myfrom = oldconf[sub]
-        myto = myconf[sub][4:]
-        fromfile = "{}/AutoMod/{}.yaml".format(mypath, sub)
-        tofile = "/r/{}/wiki/config/automoderator".format(sub)
-        update = gendiff(sub, myfrom, myto, fromfile, tofile)
-        if not update:
-            continue
-        if verify(sub):
-            path = "{}/AutoMod/{}.yaml".format(mypath, sub)
-            writeyaml(path, myto)
+    local = loadrules(mypath)
+    subs = sublist(local)
+    live = dumprules(r, subs)
+    myfrom = concatconf("all", local)
+    myto = concatconf("all", live)
+    update = gendiff("rules.yaml", myfrom, myto, "rules.yaml", "Reddit")
+    if update and verify("rules.yaml"):
+        writeyaml(mypath, live)
 
 def push(r, mypath, mycmd):
     """Update live configs from local copy."""
-    myconf = localconf(mypath)
-    liveconf = remoteconf(r, list(myconf))
-    for sub in list(liveconf):
-        try:
-            myfrom = liveconf[sub].content_md.replace("\r\n", "\n")
-        except:
-            print("{}: trouble reading wiki page".format(sub))
-            continue
-        myto = concatconf(sub, myconf)
-        fromfile = "/r/{}/wiki/config/automoderator".format(sub)
-        tofile = "{}/AutoMod/{{all,{}}}.yaml".format(mypath, sub)
-        update = gendiff(sub, myfrom, myto, fromfile, tofile)
-        if not update:
-            continue
-        if verify(sub):
+    local = loadrules(mypath)
+    subs = sublist(local)
+    live = dumprules(r, subs)
+    for sub in subs:
+        myfrom = concatconf(sub, live)
+        myto = concatconf(sub, local)
+        myfromfile = "/r/{}/wiki/config/automoderator".format(sub)
+        update = gendiff(sub, myfrom, myto, myfromfile, "rules.yaml")
+        if update and verify(sub):
             reasons = input("Commit message: ")
             try:
-                liveconf[sub].edit(myto, reasons)
+                r.subreddit(sub).wiki["config/automoderator"].edit(myto, reasons)
             except:
                 print("{}: trouble editing wiki page".format(sub))
                 continue
 
-def remoteconf(r, subs):
-    """Return AutoModerator wiki pages from subreddit configs."""
-    rconf = {}
-    if "all" in subs:
-        subs.remove("all")
-    for sub in subs:
-        page = r.subreddit(sub).wiki["config/automoderator"]
-        rconf[sub] = page
-    return rconf
+def sublist(conf):
+    """Return list of subreddits from loaded configs."""
+    subs = set()
+    for rule in conf:
+        for sub in conf[rule]:
+            subs.add(sub)
+    subs = list(subs)
+    subs.sort()
+    return subs
 
-def sharedconf(subs, liveconf):
-    """Return full config with shared rules tagged."""
-    myconf = collections.OrderedDict()
-    for sub in subs:
-        try:
-            rules = liveconf[sub].content_md.replace("\r\n", "\n").split("---\n")
-        except:
-            print("{}: trouble reading wiki page".format(sub))
-            continue
-        if "" in rules:
-            rules.remove("")
-        for rule in rules:
-            if rule in myconf:
-                myconf[rule].append(sub)
-            else:
-                myconf[rule] = [sub]
-    for rule in myconf:
-        if len(subs) == len(myconf[rule]):
-            myconf[rule] = ["all"]
-    return myconf
-
-def verify(sub):
+def verify(dest):
     """Query for confirmation of sub update."""
-    line = input("Update /r/{} [Y/n]: ".format(sub))
+    line = input("Update {} [Y/n]: ".format(dest))
     readline.remove_history_item(readline.get_current_history_length() - 1)
     if line == "Y":
         return True
@@ -163,18 +156,23 @@ def whatdo():
     sap.required = True
     ap_init = sap.add_parser("init", help="create new local copy of configs")
     ap_init.add_argument("subreddit", nargs="+", help="a subreddit name")
+    ap_modinit = sap.add_parser(
+            "modinit",
+            help="create new local copy of configs from all moderated")
     ap_pull = sap.add_parser("pull", help="update local copy of configs")
     ap_push = sap.add_parser("push", help="update live configs from local copy")
     return ap.parse_args()
 
-def writeyaml(path, rules):
-    """Output a new local YAML file."""
-    conf = open(path, "w")
-    conf.write(rules)
-    conf.close()
+def writeyaml(mypath, conf):
+    """Output a local YAML file."""
+    path = "{}/rules.yaml".format(mypath)
+    rules = open(path, "w")
+    rules.write(concatconf("all", conf))
+    rules.write("\n")
+    rules.close()
 
 if __name__ == "__main__":
     mypath = os.path.dirname(os.path.realpath(__file__))
     mycmd = whatdo()
-    commands = {"init": init, "pull": pull, "push": push}
+    commands = {"init": init, "modinit": modinit, "pull": pull, "push": push}
     commands[mycmd.command](praw.Reddit(), mypath, mycmd)
