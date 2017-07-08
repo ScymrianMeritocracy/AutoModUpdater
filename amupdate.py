@@ -19,19 +19,20 @@ def concatconf(sub, myconf):
         concat = "{}---\n{}".format(myconf["all"], myconf[sub])
     return concat
 
-def gendiff(sub, myfrom, myto, fromfile, tofile):
+def gendiff(sub, myfrom, myto, myfromfile, mytofile):
     """Generate and page a diff for the given YAML."""
     diff = difflib.unified_diff(
             myfrom.splitlines(),
             myto.splitlines(),
-            fromfile,
-            tofile)
+            fromfile = myfromfile,
+            tofile = mytofile,
+            lineterm = "")
     try:
-        n = next(diff)
+        first = next(diff)
     except:
         print("{}: up-to-date".format(sub))
         return False
-    pydoc.pager("\n".join(diff))
+    pydoc.pager("{}\n{}".format(first, "\n".join(diff)))
     return True
 
 def init(r, mypath, mycmd):
