@@ -1,6 +1,6 @@
 [DEFAULT]
 # https://github.com/reddit/reddit/wiki/API#rules
-user_agent: python:com.scymrian-meritocracy.AutoMod-updater:v0.1.0 (by /u/YOURUSERNAME)
+user_agent: python:org.scymrian-meritocracy.AutoMod-updater:v0.1.0 (by /u/YOURUSERNAME)
 client_id: ALONGCODE
 client_secret: ANEVENLONGERCODE
 username: YOURMODACCT
