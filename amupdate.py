@@ -99,7 +99,7 @@ def push(r, mypath, mycmd):
     liveconf = remoteconf(r, list(myconf))
     for sub in list(liveconf):
         try:
-            myfrom = liveconf[sub].content_md
+            myfrom = liveconf[sub].content_md.replace("\r\n", "\n")
         except:
             print("{}: trouble reading wiki page".format(sub))
             continue
@@ -132,7 +132,7 @@ def sharedconf(subs, liveconf):
     myconf = collections.OrderedDict()
     for sub in subs:
         try:
-            rules = liveconf[sub].content_md.split("---\n")
+            rules = liveconf[sub].content_md.replace("\r\n", "\n").split("---\n")
         except:
             print("{}: trouble reading wiki page".format(sub))
             continue
