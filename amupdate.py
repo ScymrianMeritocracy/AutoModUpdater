@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python
 
 import argparse
 import bisect
@@ -10,6 +10,11 @@ import pydoc
 import readline
 import ruamel.yaml
 import sys
+
+try:
+    input = raw_input
+except NameError:
+    pass
 
 def concatconf(sub, conf):
     """Return concatented rule list from loaded configs."""

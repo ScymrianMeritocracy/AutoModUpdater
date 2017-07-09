@@ -6,7 +6,6 @@ This is a simple script allowing subreddit [AutoModerator](https://www.reddit.co
 Requirements
 ------------
 
- * [Python 3](https://www.python.org/)
  * [PRAW 4.0.0+](https://praw.readthedocs.io/en/latest/index.html)
  * [ruamel.yaml](https://yaml.readthedocs.io/en/latest/index.html)
 
